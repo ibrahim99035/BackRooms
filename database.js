@@ -1,8 +1,15 @@
 const mongoose = require('mongoose');
+const uri = 'mongodb+srv://Hema:rVDwRjf3mOKKktdY@iotcontrolstorage.knknsee.mongodb.net/?retryWrites=true&w=majority';
 
-mongoose.connect('mongodb://localhost/your-database-name', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+mongoose.connect(uri, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
 });
 
-module.exports = mongoose.connection;
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'MongoDB connection error:'));
+db.once('open', () => {
+  console.log('Connected to MongoDB Atlas');
+});
+
+module.exports = db; // Export the database connection

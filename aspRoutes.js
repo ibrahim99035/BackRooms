@@ -1,190 +1,158 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
-
 const authMiddleware = require('./authMiddleware');
+const User = require('./user').User;
+const Room = require('./user').Room;
+const ASP = require('./user').ASP;
+const jwt = require('jsonwebtoken');
 
-const User = require('./user');
+const handleError = (res, status, message) => {
+  return res.status(status).json({ error: message });
+};
 
-const Room = User.Room; // Import the Room model from the user.js module
-const ASP = User.ASP; // Import the ASP model from the user.js module
+const checkOwnership = (user, room) => {
+  return user._id.toString() === room.owner.toString();
+};
 
-// Route for updating data state
-router.post('/update-asp-state/:userId/:roomId/:aspId', authMiddleware.ensureAuthenticated, async (req, res) => {
+// Middleware to check if the user is the owner of the room
+const checkRoomOwnership = async (req, res, next) => {
+  const user = req.user; // Assuming you set the user in your authentication middleware
+  const { roomId } = req.params;
+  const room = await Room.findById(roomId);
+
+  if (!room || !checkOwnership(user, room)) {
+    return handleError(res, 403, 'Permission denied');
+  }
+
+  req.room = room;
+  next();
+};
+
+// Middleware to authenticate IoT devices
+const authenticateIoT = (req, res, next) => {
+  const token = req.header('x-auth-token'); // Assume the token is sent as a header
+
+  if (!token) {
+    return res.status(401).json({ message: 'Access denied. No token provided.' });
+  }
+
   try {
-      const { userId, roomId, aspId } = req.params;
-      const { state } = req.body; // Get the state from the request body
-
-      // Find the user
-      const user = await User.findOne({ _id: userId });
-
-      // Ensure that the authenticated user exists
-      if (!user) {
-          return res.status(404).json({ message: 'User not found' });
-      }
-
-      // Find the room within the user's rooms
-      const room = user.rooms.find((room) => room.id === roomId);
-
-      // Ensure that the room exists and has ASPs
-      if (!room || !room.ASPs || room.ASPs.length === 0) {
-          return res.status(404).json({ message: 'Room or ASPs not found' });
-      }
-
-      // Check if the user is the owner of the room
-      if (room.owner !== user.id) {
-          return res.status(403).json({ message: 'Permission denied' });
-      }
-
-      // Find the ASP within the room's ASPs
-      const asp = room.ASPs.find((asp) => asp.id === aspId);
-
-      // Ensure that the ASP exists
-      if (!asp) {
-          return res.status(404).json({ message: 'ASP not found in the room' });
-      }
-
-      // Update the state of the ASP based on the state provided in the request
-      asp.state = state;
-
-      // Save the updated ASP state to the database
-      await asp.save();
-
-      res.status(200).json({ message: 'ASP state updated successfully' });
+    const decoded = jwt.verify(token, jwtSecretKey);
+    req.user = decoded;
+    next();
   } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to update ASP state' });
+    res.status(400).json({ message: 'Invalid token.' });
+  }
+};
+
+// Route for updating ASP state
+router.post('/update-asp-state/:userId/:roomId/:aspId', async (req, res) => {
+  try {
+    const aspId = req.params.aspId;
+    const { state } = req.body;
+
+    const asp = await ASP.findById(aspId);
+
+    if (!asp) {
+      return handleError(res, 404, 'ASP not found in the room');
+    }
+    console.log(state);
+    console.log(asp.state);
+    asp.state = state;
+    await asp.save();
+    console.log(asp.state);
+    res.status(200).json({ message: 'ASP state updated successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to update ASP state');
   }
 });
 
-// Route to get ASP state
-router.get('/read-asp-state/:userId/:roomId/:aspId', authMiddleware.ensureAuthenticated, async (req, res) => {
+// Route for retrieving ASP state
+router.get('/read-asp-state/:userId/:roomId/:aspId', async (req, res) => {
   try {
-      const { userId, roomId, aspId } = req.params;
+    const aspId = req.params.aspId;
+    const asp = await ASP.findById(aspId);
 
-      // Find the user
-      const user = await User.findOne({ _id: userId });
-
-      // Ensure that the authenticated user exists
-      if (!user) {
-          return res.status(404).json({ message: 'User not found' });
-      }
-
-      // Find the room within the user's rooms
-      const room = user.rooms.find((room) => room.id === roomId);
-
-      // Ensure that the room exists and has ASPs
-      if (!room || !room.ASPs || room.ASPs.length === 0) {
-          return res.status(404).json({ message: 'Room or ASPs not found' });
-      }
-
-      // Check if the user is the owner of the room
-      if (room.owner !== user.id) {
-          return res.status(403).json({ message: 'Permission denied' });
-      }
-
-      // Find the ASP within the room's ASPs
-      const asp = room.ASPs.find((asp) => asp.id === aspId);
-
-      // Ensure that the ASP exists
-      if (!asp) {
-          return res.status(404).json({ message: 'ASP not found in the room' });
-      }
-
-      // Return the state of the ASP
-      res.status(200).json({ state: asp.state });
+    if (!asp) {
+      return handleError(res, 404, 'ASP not found in the room');
+    }
+    
+    res.status(200).json({ state: asp.state });
   } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to retrieve ASP state' });
+    console.error(error);
+    handleError(res, 500, 'Failed to retrieve ASP state');
   }
 });
 
-// Route for assigning a room to a user
-router.post('/assign-room/:userId', authMiddleware.ensureAuthenticated, async (req, res) => {
-    try {
-      const { userId } = req.params;
-      const { roomId } = req.body;
-  
-      // Find the user
-      const user = await User.findOne({ id: userId });
-  
-      // Ensure that the authenticated user exists
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
-  
-      // Find the room by its ID
-      const room = await Room.findOne({ id: roomId });
-  
-      // Ensure that the room exists
-      if (!room) {
-        return res.status(404).json({ message: 'Room not found' });
-      }
-  
-      // Assign the room to the user
-      user.rooms.push(room);
-      await user.save();
-  
-      res.status(200).json({ message: 'Room assigned to user successfully' });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to assign room to user' });
+// Route for adding a room related to the user
+router.post('/add-room/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { roomTitle } = req.body;
+
+    console.log('Room Addition: Data Delivers');
+
+    const user = await User.findById(userId);
+    console.log('User found');
+
+    if (!user) {
+      return handleError(res, 404, 'User not found');
     }
+    
+    const newRoom = new Room({ roomTitle });
+    await newRoom.save();
+
+    user.rooms.push(newRoom);
+    await user.save();
+
+    res.status(200).json({ message: 'Room added and assigned to the user successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to add room and assign to user');
+  }
 });
-  
-// Route for assigning an ASP to a room
-router.post('/assign-asp/:roomId', authMiddleware.ensureAuthenticated, async (req, res) => {
-    try {
-      const { roomId } = req.params;
-      const { aspId } = req.body;
-  
-      // Find the room by its ID
-      const room = await Room.findOne({ id: roomId });
-  
-      // Ensure that the room exists
-      if (!room) {
-        return res.status(404).json({ message: 'Room not found' });
-      }
-  
-      // Find the ASP by its ID
-      const asp = await ASP.findOne({ id: aspId });
-  
-      // Ensure that the ASP exists
-      if (!asp) {
-        return res.status(404).json({ message: 'ASP not found' });
-      }
-  
-      // Assign the ASP to the room
-      room.ASPs.push(asp);
-      await room.save();
-  
-      res.status(200).json({ message: 'ASP assigned to room successfully' });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to assign ASP to room' });
+
+// Route for adding a new ASP inside the room
+router.post('/add-asp/:userId/:roomId', async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    const userId = req.params.userId
+    const { deviceName, state } = req.body;
+
+    const room = await Room.findById(roomId);
+
+    if (!room) {
+      return handleError(res, 404, 'Room not found');
     }
+
+    const newASP = new ASP({ deviceName, state });
+    await newASP.save();
+
+    room.ASPs.push(newASP);
+    await room.save();
+
+    res.status(200).json({ message: 'ASP added to the room successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to add ASP to the room');
+  }
 });
 
 // Route for retrieving rooms with relevant ASPs
-router.get('/get-rooms-with-asps/:userId', authMiddleware.ensureAuthenticated, async (req, res) => {
+router.get('/get-rooms-with-asps/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    const user = await User.findById(userId);
 
-    // Find the user
-    const user = await User.findOne({ _id: userId });
-
-    // Ensure that the authenticated user exists
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return handleError(res, 404, 'User not found');
     }
 
-    // Find the rooms associated with the user
     const rooms = await Room.find({ _id: { $in: user.rooms } });
 
-    // Fetch the relevant ASPs for each room
     const roomsWithASPs = await Promise.all(
       rooms.map(async (room) => {
-        // Find the ASPs associated with the room
         const asps = await ASP.find({ _id: { $in: room.ASPs } });
         return { room, asps };
       })
@@ -193,7 +161,92 @@ router.get('/get-rooms-with-asps/:userId', authMiddleware.ensureAuthenticated, a
     res.status(200).json({ message: 'Rooms with relevant ASPs retrieved', roomsWithASPs });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to retrieve rooms with ASPs' });
+    handleError(res, 500, 'Failed to retrieve rooms with ASPs');
+  }
+});
+
+// Route for deleting a room
+router.delete('/delete-room/:userId/:roomId', async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    const user = req.params.userId;
+    const room = await Room.findById(roomId);
+    
+    if (!room) {
+      return handleError(res, 404, 'Room not found');
+    }
+
+    result = await room.deleteOne({ _id: roomId });
+    if (result.deletedCount === 1) {
+        res.status(200).json({ message: 'Room deleted successfully' });
+    } else {
+        res.status(200).json({ message:'Document not found or already removed.' });
+    }
+    // res.status(200).json({ message: 'Room deleted successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to delete room');
+  }
+});
+
+// Route for deleting an ASP
+router.delete('/delete-asp/:userId/:roomId/:aspId', async (req, res) => {
+  try {
+    const aspId = req.params.aspId;
+    const room = req.params.roomId; // Use the room set in the checkRoomOwnership middleware
+
+    const asp = await ASP.findById(aspId);
+
+    if (!asp) {
+      return handleError(res, 404, 'ASP not found in the room');
+    }
+
+    result = await asp.deleteOne({ _id: aspId });
+    if (result.deletedCount === 1) {
+        res.status(200).json({ message: 'ASP deleted successfully' });
+    } else {
+        res.status(200).json({ message:'ASP not found or already removed.' });
+    }
+
+    //res.status(200).json({ message: 'ASP deleted successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to delete ASP');
+  }
+});
+
+// Route for updating a room's title
+router.put('/update-room-title/:userId/:roomId', async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    const { roomTitle } = req.body;
+    const room = await Room.findById(roomId);
+
+    room.roomTitle = roomTitle;
+    await room.save();
+
+    res.status(200).json({ message: 'Room title updated successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to update room title');
+  }
+});
+
+// Route for updating a asp sevice's name
+router.put('/update-device-name/:userId/:roomId/:aspId', async (req, res) => {
+  try {
+    const apsId = req.params.aspId;
+    const { deviceName } = req.body;
+    const asp = await ASP.findById(apsId);
+
+    asp.deviceName = deviceName;
+    
+    await asp.save();
+
+    res.status(200).json({ message: 'Device name updated successfully' });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to update device name');
   }
 });
 
