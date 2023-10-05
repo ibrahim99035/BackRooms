@@ -165,12 +165,33 @@ router.get('/get-rooms-with-asps/:userId', async (req, res) => {
   }
 });
 
+router.get('/get-devices/:userId/:roomId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const roomId = req.params.roomId;
+    const user = await User.findById(userId);
+    const room = await Room.findById(roomId);
+
+    if (!user) {
+      return handleError(res, 404, 'User not found');
+    }
+
+    const devices = await ASP.find({ _id: { $in: room.ASPs } });
+
+    res.status(200).json({ message: 'Devices in the current room retrieved', devices });
+  } catch (error) {
+    console.error(error);
+    handleError(res, 500, 'Failed to retrieve devices');
+  }
+});
+
 // Route for deleting a room
 router.delete('/delete-room/:userId/:roomId', async (req, res) => {
   try {
     const roomId = req.params.roomId;
-    const user = req.params.userId;
+    const userId = req.params.userId;
     const room = await Room.findById(roomId);
+    const user = await User.findById(userId);
     
     if (!room) {
       return handleError(res, 404, 'Room not found');
@@ -178,6 +199,7 @@ router.delete('/delete-room/:userId/:roomId', async (req, res) => {
 
     result = await room.deleteOne({ _id: roomId });
     if (result.deletedCount === 1) {
+        user.save();
         res.status(200).json({ message: 'Room deleted successfully' });
     } else {
         res.status(200).json({ message:'Document not found or already removed.' });
@@ -193,9 +215,10 @@ router.delete('/delete-room/:userId/:roomId', async (req, res) => {
 router.delete('/delete-asp/:userId/:roomId/:aspId', async (req, res) => {
   try {
     const aspId = req.params.aspId;
-    const room = req.params.roomId; // Use the room set in the checkRoomOwnership middleware
+    const roomId = req.params.roomId; 
 
     const asp = await ASP.findById(aspId);
+    const room = await Room.findById(roomId);
 
     if (!asp) {
       return handleError(res, 404, 'ASP not found in the room');
@@ -203,6 +226,7 @@ router.delete('/delete-asp/:userId/:roomId/:aspId', async (req, res) => {
 
     result = await asp.deleteOne({ _id: aspId });
     if (result.deletedCount === 1) {
+        room.save();
         res.status(200).json({ message: 'ASP deleted successfully' });
     } else {
         res.status(200).json({ message:'ASP not found or already removed.' });
